@@ -1,0 +1,14 @@
+{
+  "name": "fizo",
+  "private": true,
+  "workspaces": [
+    "backend"
+  ],
+  "scripts": {
+    "dev": "bun --filter '*' dev",
+    "build": "bun --filter '*' build",
+    "db:push": "bun --filter backend db:push",
+    "db:migrate": "bun --filter backend db:migrate",
+    "db:studio": "bun --filter backend db:studio"
+  }
+}
