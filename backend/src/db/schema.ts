@@ -5,11 +5,14 @@ const table = snakeCase.table;
 
 export const gender = pgEnum("gender", ["male", "female"]);
 
+export const userRole = pgEnum("user_role", ["organizer", "admin"]);
+
 export const users = table("user", {
   id: uuid().defaultRandom().primaryKey(),
   email: varchar({ length: 255 }).notNull().unique(),
   passwordHash: text().notNull(),
   name: varchar({ length: 255 }).notNull(),
+  role: userRole().default("organizer").notNull(),
   createdAt: timestamp().defaultNow().notNull(),
 });
 
@@ -56,7 +59,15 @@ export const participants = table("participant", {
   name: varchar({ length: 255 }).notNull(),
   age: integer(),
   gender: gender(),
-  accessToken: varchar({ length: 64 }).notNull(),
+  createdAt: timestamp().defaultNow().notNull(),
+});
+
+export const refreshTokens = table("refresh_token", {
+  id: uuid().defaultRandom().primaryKey(),
+  token: varchar({ length: 64 }).notNull().unique(),
+  userId: uuid().references(() => users.id, { onDelete: "cascade" }),
+  participantId: uuid().references(() => participants.id, { onDelete: "cascade" }),
+  expiresAt: timestamp({ withTimezone: true }).notNull(),
   createdAt: timestamp().defaultNow().notNull(),
 });
 

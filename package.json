@@ -2,13 +2,16 @@
   "name": "fizo",
   "private": true,
   "workspaces": [
-    "backend"
+    "backend",
+    "shared"
   ],
   "scripts": {
     "dev": "bun --filter '*' dev",
     "build": "bun --filter '*' build",
     "db:push": "bun --filter backend db:push",
     "db:migrate": "bun --filter backend db:migrate",
-    "db:studio": "bun --filter backend db:studio"
+    "db:studio": "bun --filter backend db:studio",
+    "admin:create": "bun --cwd backend run admin:create",
+    "db:seed": "bun --filter backend db:seed"
   }
 }
