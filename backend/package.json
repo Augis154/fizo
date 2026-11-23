@@ -1,5 +1,12 @@
 {
   "name": "backend",
+  "private": true,
+  "types": "./src/types.ts",
+  "exports": {
+    ".": {
+      "types": "./src/types.ts"
+    }
+  },
   "scripts": {
     "dev": "bun --env-file=../.env run --hot src/index.ts",
     "db:push": "bun --env-file=../.env --bun drizzle-kit push",

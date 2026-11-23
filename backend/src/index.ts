@@ -12,9 +12,9 @@ import challengeResultsRoutes from "./routes/challenge_results";
 import participantsRoutes from "./routes/participants";
 import { getPgErrorCode, PG_FOREIGN_KEY_VIOLATION, PG_UNIQUE_VIOLATION } from "./db/errors";
 
-const routes = new Hono();
+const app = new Hono();
 
-routes.onError((err, c) => {
+app.onError((err, c) => {
   if (err instanceof HTTPException) {
     return c.json({ error: err.message }, err.status);
   }
@@ -31,17 +31,18 @@ routes.onError((err, c) => {
   return c.json({ error: "Internal server error" }, 500);
 });
 
-routes.route("/auth", authRoutes);
-routes.route("/users", usersRoutes);
-routes.route("/templates", templatesRoutes);
-routes.route("/spaces", spacesRoutes);
-routes.route("/challenges", challengesRoutes);
-routes.route("/challenge-results", challengeResultsRoutes);
-routes.route("/participants", participantsRoutes);
+const routes = app
+  .route("/auth", authRoutes)
+  .route("/users", usersRoutes)
+  .route("/templates", templatesRoutes)
+  .route("/spaces", spacesRoutes)
+  .route("/challenges", challengesRoutes)
+  .route("/challenge-results", challengeResultsRoutes)
+  .route("/participants", participantsRoutes);
 
-routes.get(
+app.get(
   "/openapi",
-  openAPIRouteHandler(routes, {
+  openAPIRouteHandler(app, {
     documentation: {
       info: {
         title: "Fizo API",
@@ -57,8 +58,8 @@ routes.get(
   })
 );
 
-routes.get("/swagger", swaggerUI({ url: "/openapi" }));
+app.get("/swagger", swaggerUI({ url: "/openapi" }));
 
 export type ApiType = typeof routes;
 
-export default routes;
+export default app;
