@@ -1,0 +1,3 @@
+# shadcn-svelte components are generated: leave them exactly as the CLI writes them so that
+# `git diff` after `shadcn-svelte add -o` shows only upstream changes. See src/lib/components/ui/README.md.
+src/lib/components/ui/

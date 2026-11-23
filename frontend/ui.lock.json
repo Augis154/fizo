@@ -1,0 +1,146 @@
+{
+  "alert": {
+    "upstream": "d789eb9b94d46f0d",
+    "files": {
+      "alert-action.svelte": "31be0f3d0e044eaf",
+      "alert-description.svelte": "a6ae0a5e34bcc727",
+      "alert-title.svelte": "c1f77d52ba9d8046",
+      "alert.svelte": "e393f31a03b9a4bf",
+      "index.ts": "28eb51f1c28bc903"
+    }
+  },
+  "badge": {
+    "upstream": "1750a56e16b13353",
+    "files": {
+      "badge.svelte": "94081ebf5f04c4ec",
+      "index.ts": "1dc9eba432869188"
+    }
+  },
+  "button": {
+    "upstream": "3e2e617d54022955",
+    "files": {
+      "button.svelte": "e1d568a081c02f9a",
+      "index.ts": "0f6b6f040d92b415"
+    }
+  },
+  "card": {
+    "upstream": "ee085aedf1bad0ea",
+    "files": {
+      "card-action.svelte": "f865318c04a4ff8f",
+      "card-content.svelte": "3da1d5540520f59a",
+      "card-description.svelte": "5adc543348973a35",
+      "card-footer.svelte": "b7fb1577602b497d",
+      "card-header.svelte": "8e61723b7af0ba35",
+      "card-title.svelte": "4de899b617491f1f",
+      "card.svelte": "2c96bdf619e18ea2",
+      "index.ts": "41b4e0bf782f5e2b"
+    }
+  },
+  "dropdown-menu": {
+    "upstream": "cfeb47be7b764cf4",
+    "files": {
+      "dropdown-menu-checkbox-group.svelte": "96f8cf7d2ce72fd2",
+      "dropdown-menu-checkbox-item.svelte": "b088f81886a81d71",
+      "dropdown-menu-content.svelte": "7638fb83246bb21f",
+      "dropdown-menu-group-heading.svelte": "2aa1d2f639f002b3",
+      "dropdown-menu-group.svelte": "75f1eaeff2b3cf25",
+      "dropdown-menu-item.svelte": "56627e828c19a006",
+      "dropdown-menu-label.svelte": "04bf43da0d9e8421",
+      "dropdown-menu-portal.svelte": "38f6abf9c1d47d2a",
+      "dropdown-menu-radio-group.svelte": "ac025c63e0ade7c2",
+      "dropdown-menu-radio-item.svelte": "ad2eff3a3d69ab8f",
+      "dropdown-menu-separator.svelte": "4652119ae1f7fc2d",
+      "dropdown-menu-shortcut.svelte": "16b77d2b0687e0ac",
+      "dropdown-menu-sub-content.svelte": "9e109febe0315f64",
+      "dropdown-menu-sub-trigger.svelte": "b824832f4b7848b9",
+      "dropdown-menu-sub.svelte": "1208155828183ef7",
+      "dropdown-menu-trigger.svelte": "bdad1ff46fd23466",
+      "dropdown-menu.svelte": "d49b60f3d9832a87",
+      "index.ts": "843e6f031021c365"
+    }
+  },
+  "input": {
+    "upstream": "e3759eb914aaf87a",
+    "files": {
+      "index.ts": "4e0ad69d49a27194",
+      "input.svelte": "cdb77af6f9555026"
+    }
+  },
+  "label": {
+    "upstream": "3444dff285cd8fb2",
+    "files": {
+      "index.ts": "ea17621b03066fc6",
+      "label.svelte": "cafe265a42cb2aed"
+    }
+  },
+  "progress": {
+    "upstream": "01c0ebb516ccea30",
+    "files": {
+      "index.ts": "047b1de9082bd67d",
+      "progress.svelte": "ece5401b7aa0d0d4"
+    }
+  },
+  "select": {
+    "upstream": "abed8beb23d50803",
+    "files": {
+      "index.ts": "bc04c69cc47b7cae",
+      "select-content.svelte": "9f11e3318b113405",
+      "select-group-heading.svelte": "b598b05597dceb02",
+      "select-group.svelte": "5fdf4f3bee343b34",
+      "select-item.svelte": "ff66c79d57132146",
+      "select-label.svelte": "5fcc2b2c2eb77da2",
+      "select-portal.svelte": "3ad1139eaca3b9c9",
+      "select-scroll-down-button.svelte": "25da0e69f2c01a88",
+      "select-scroll-up-button.svelte": "8fdceed6b0b78c86",
+      "select-separator.svelte": "2603afeec2a5e235",
+      "select-trigger.svelte": "5ac2e861a5710b7f",
+      "select-value.svelte": "d74206c96be85eb3",
+      "select.svelte": "4a7062d01d4cd23e"
+    }
+  },
+  "separator": {
+    "upstream": "88bc58a8410514a4",
+    "files": {
+      "index.ts": "beeaaaab286f1aef",
+      "separator.svelte": "6640a4c992ec6232"
+    }
+  },
+  "skeleton": {
+    "upstream": "412486c7937521c9",
+    "files": {
+      "index.ts": "25f4d78e3dbd09ea",
+      "skeleton.svelte": "2b8d9b0ecf465b6b"
+    }
+  },
+  "sonner": {
+    "upstream": "78b0f3805ed03405",
+    "files": {
+      "index.ts": "a72067e92f2db255",
+      "sonner.svelte": "a3b657be6792a819"
+    }
+  },
+  "table": {
+    "upstream": "1beb4bec34aa43ef",
+    "files": {
+      "index.ts": "25acd0f0d6739172",
+      "table-body.svelte": "e3ec1611effda1f3",
+      "table-caption.svelte": "833673985bccdd54",
+      "table-cell.svelte": "74106aa62ac91587",
+      "table-footer.svelte": "32a2b703dfda4803",
+      "table-head.svelte": "d3c793b0e6d0884c",
+      "table-header.svelte": "a5a1add2ce67ab43",
+      "table-row.svelte": "ec608e4fbd83403b",
+      "table.svelte": "f834ba7ac657f84a"
+    }
+  },
+  "tabs": {
+    "upstream": "380403d39036f70c",
+    "files": {
+      "index.ts": "e8c5e55fb540595b",
+      "tabs-content.svelte": "9c7328fb59f05f60",
+      "tabs-list.svelte": "50826dcf6f422120",
+      "tabs-trigger.svelte": "a8ad1f1d87e4e72b",
+      "tabs.svelte": "2cfa1d6865d18237"
+    }
+  }
+}
