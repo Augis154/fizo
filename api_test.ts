@@ -1,6 +1,6 @@
-import db, { challenge_results, challenges, participants, spaces, templates, users } from "./backend/src/db";
+import db, { challenge_results, challenges, participants, refreshTokens, spaces, templates, users } from "./backend/src/db";
 
-const API_URL = "http://localhost:3000";
+const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
 const assert = (condition: unknown, message: string) => {
   if (!condition) {
@@ -8,218 +8,284 @@ const assert = (condition: unknown, message: string) => {
   }
 };
 
-const request = async (path: string, init?: RequestInit) => {
-  const response = await fetch(`${API_URL}${path}`, init);
+type RequestOptions = { method?: string; body?: unknown; token?: string };
+
+const request = async (path: string, { method = "GET", body, token }: RequestOptions = {}) => {
+  const headers: Record<string, string> = {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(`${API_URL}${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
   const text = await response.text();
-  let body: unknown = null;
+  let parsed: any = null;
 
   if (text) {
     try {
-      body = JSON.parse(text);
+      parsed = JSON.parse(text);
     } catch {
-      body = text;
+      parsed = text;
     }
   }
 
-  return { response, body };
+  return { response, body: parsed };
 };
 
-const json = (value: unknown): RequestInit => ({
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify(value),
-});
-
-const expectStatus = (response: Response, expected: number, body: unknown) => {
+const expectStatus = async (path: string, options: RequestOptions, expected: number) => {
+  const result = await request(path, options);
   assert(
-    response.status === expected,
-    `Expected ${response.url} to return ${expected}, got ${response.status}: ${JSON.stringify(body)}`
+    result.response.status === expected,
+    `Expected ${options.method ?? "GET"} ${path} to return ${expected}, got ${result.response.status}: ${JSON.stringify(result.body)}`
   );
+  return result.body;
 };
 
-let result: Awaited<ReturnType<typeof request>>;
+let body: any;
 
-result = await request("/openapi");
-expectStatus(result.response, 200, result.body);
-assert(typeof result.body === "object" && result.body !== null, "OpenAPI should return a document");
+body = await expectStatus("/openapi", {}, 200);
+assert(body?.components?.securitySchemes?.bearerAuth, "OpenAPI should document bearer auth");
 
-result = await request("/swagger");
-expectStatus(result.response, 200, result.body);
-assert(typeof result.body === "string" && result.body.includes("swagger"), "Swagger should return its HTML page");
+body = await expectStatus("/swagger", {}, 200);
+assert(typeof body === "string" && body.includes("swagger"), "Swagger should return its HTML page");
 
 await db.delete(challenge_results).execute();
 await db.delete(challenges).execute();
+await db.delete(refreshTokens).execute();
 await db.delete(participants).execute();
 await db.delete(templates).execute();
 await db.delete(spaces).execute();
 await db.delete(users).execute();
 
-const userEmail = "test@test.lt";
-const userName = "Test User";
-const userPassword = "password123";
+// Organizers
+const organizerA = { email: "a@test.lt", name: "Organizer A", password: "password123" };
+const organizerB = { email: "b@test.lt", name: "Organizer B", password: "password123" };
 
-result = await request("/users/register", {
-  method: "POST",
-  ...json({ email: userEmail, name: userName, password: userPassword }),
+body = await expectStatus("/auth/register", { method: "POST", body: organizerA }, 201);
+assert(body.user.email === organizerA.email && body.accessToken && body.refreshToken, "Register should log the user in");
+await expectStatus("/users/me", { token: body.accessToken }, 200);
+await expectStatus("/auth/register", { method: "POST", body: organizerB }, 201);
+body = await expectStatus("/auth/register", { method: "POST", body: organizerA }, 409);
+assert(!("details" in body), "Error responses must not leak database details");
+
+await expectStatus("/auth/login", { method: "POST", body: { email: organizerA.email, password: "wrongpass" } }, 401);
+
+body = await expectStatus("/auth/login", { method: "POST", body: { email: organizerA.email, password: organizerA.password } }, 200);
+assert(body.user.email === organizerA.email, "Login returned the wrong user");
+const userAId: string = body.user.id;
+let tokenA: string = body.accessToken;
+let refreshA: string = body.refreshToken;
+
+body = await expectStatus("/auth/login", { method: "POST", body: { email: organizerB.email, password: organizerB.password } }, 200);
+const tokenB: string = body.accessToken;
+const refreshB: string = body.refreshToken;
+
+const admin = { email: "admin@test.lt", name: "Admin", password: "password123" };
+await db.insert(users).values({
+  email: admin.email,
+  name: admin.name,
+  passwordHash: await Bun.password.hash(admin.password),
+  role: "admin",
 });
-expectStatus(result.response, 201, result.body);
+body = await expectStatus("/auth/login", { method: "POST", body: { email: admin.email, password: admin.password } }, 200);
+assert(body.user.role === "admin", "Admin login should report the admin role");
+const tokenAdmin: string = body.accessToken;
 
-result = await request("/users/login", {
-  method: "POST",
-  ...json({ email: userEmail, password: userPassword }),
-});
-expectStatus(result.response, 200, result.body);
-assert(typeof result.body === "object" && result.body !== null, "Login should return a user object");
-const userData = result.body as { id: string; email: string; name: string };
-const userId = userData.id;
-assert(userData.email === userEmail && userData.name === userName, "Login returned the wrong user");
+await expectStatus("/users", { token: tokenA }, 403);
+body = await expectStatus("/users", { token: tokenAdmin }, 200);
+assert(body.length === 3 && body.every((u: any) => !("passwordHash" in u)), "Admin should list users without hashes");
 
-result = await request(`/users/${userId}/spaces`);
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 0, "A new user should have no spaces");
+await expectStatus("/users/me", {}, 401);
+await expectStatus("/users/me", { token: "not-a-jwt" }, 401);
+body = await expectStatus("/users/me", { token: tokenA }, 200);
+assert(body.name === organizerA.name, "GET /users/me returned the wrong user");
 
-result = await request("/templates", {
-  method: "POST",
-  ...json({ creatorId: userId, title: "Template", type: "test", isPublic: true, config: {} }),
-});
-expectStatus(result.response, 201, result.body);
+// Refresh rotation: old refresh token is single-use
+body = await expectStatus("/auth/refresh", { method: "POST", body: { refreshToken: refreshA } }, 200);
+await expectStatus("/auth/refresh", { method: "POST", body: { refreshToken: refreshA } }, 401);
+tokenA = body.accessToken;
+refreshA = body.refreshToken;
 
-result = await request("/templates");
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 1, "Template list should contain the created template");
-const templateId = (result.body as Array<{ id: string }>)[0].id;
-
-result = await request(`/templates/${templateId}`);
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "Template", "Template lookup returned the wrong title");
-
-result = await request(`/templates/${templateId}`, {
-  method: "PATCH",
-  ...json({ title: "Updated Template" }),
-});
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "Updated Template", "Template update did not change the title");
-
-result = await request("/spaces", {
-  method: "POST",
-  ...json({ organizerId: userId, title: "Test Space" }),
-});
-expectStatus(result.response, 201, result.body);
-
-result = await request("/spaces");
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 1, "Space list should contain the created space");
-const space = (result.body as Array<{ id: string; shortId: string; title: string }>)[0];
-const spaceId = space.id;
-
-result = await request(`/spaces/${spaceId}`);
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "Test Space", "Space lookup returned the wrong title");
-
-result = await request(`/spaces/${spaceId}`, {
-  method: "PATCH",
-  ...json({ title: "Updated Space" }),
-});
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "Updated Space", "Space update did not change the title");
-
-result = await request(`/spaces/short-id/${space.shortId}`);
-expectStatus(result.response, 200, result.body);
-assert((result.body as { id: string }).id === spaceId, "Short space lookup returned the wrong space");
-
-result = await request(`/spaces/join/${space.shortId}`, {
-  method: "POST",
-  ...json({ name: "Test Participant", age: 30, gender: "male" }),
-});
-expectStatus(result.response, 200, result.body);
-assert(
-  typeof (result.body as { accessToken?: string }).accessToken === "string",
-  "Joining a space should return an access token"
+// Templates
+body = await expectStatus(
+  "/templates",
+  { method: "POST", token: tokenA, body: { title: "Private", type: "test", isPublic: false, config: { reps: 10 } } },
+  201
 );
+const privateTemplateId: string = body.id;
+assert(body.config.reps === 10, "Template config should be preserved");
 
-result = await request(`/users/${userId}/spaces`);
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 1, "User spaces should contain the created space");
+body = await expectStatus(
+  "/templates",
+  { method: "POST", token: tokenA, body: { title: "Public", type: "test", isPublic: true, config: {} } },
+  201
+);
+const publicTemplateId: string = body.id;
 
+body = await expectStatus("/templates", { token: tokenB }, 200);
+assert(body.length === 1 && body[0].id === publicTemplateId, "Organizer B should only see the public template");
+body = await expectStatus("/templates", { token: tokenA }, 200);
+assert(body.length === 2, "Organizer A should see both templates");
+
+await expectStatus(`/templates/${privateTemplateId}`, { token: tokenB }, 404);
+await expectStatus(`/templates/${publicTemplateId}`, { token: tokenB }, 200);
+await expectStatus(`/templates/${publicTemplateId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
+await expectStatus(`/templates/${publicTemplateId}`, { method: "DELETE", token: tokenB }, 403);
+
+body = await expectStatus(
+  `/templates/${privateTemplateId}`,
+  { method: "PATCH", token: tokenA, body: { title: "Updated Template" } },
+  200
+);
+assert(body.title === "Updated Template", "Template update did not change the title");
+
+body = await expectStatus("/users/me/templates", { token: tokenA }, 200);
+assert(body.length === 2, "Organizer A should own two templates");
+
+// Spaces
+body = await expectStatus("/spaces", { method: "POST", token: tokenA, body: { title: "Test Space" } }, 201);
+const spaceId: string = body.id;
+const shortId: string = body.shortId;
+
+await expectStatus(`/spaces/${spaceId}`, { token: tokenB }, 403);
+await expectStatus(`/spaces/${spaceId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
+await expectStatus(`/spaces/${spaceId}`, { method: "DELETE", token: tokenB }, 403);
+
+body = await expectStatus(`/spaces/${spaceId}`, { method: "PATCH", token: tokenA, body: { title: "Updated Space" } }, 200);
+assert(body.title === "Updated Space", "Space update did not change the title");
+
+body = await expectStatus("/users/me/spaces", { token: tokenA }, 200);
+assert(body.length === 1, "Organizer A should have one space");
+body = await expectStatus("/users/me/spaces", { token: tokenB }, 200);
+assert(body.length === 0, "Organizer B should have no spaces");
+
+body = await expectStatus(`/spaces/join/${shortId}`, {}, 200);
+assert(body.title === "Updated Space", "Join link lookup returned the wrong space");
+assert(!("id" in body) && !("organizerId" in body), "Public space lookup must not expose internal IDs");
+await expectStatus("/spaces/join/does-not-exist", {}, 404);
+
+// Challenges
 const startDate = new Date().toISOString();
 const endDate = new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString();
-result = await request("/challenges", {
-  method: "POST",
-  ...json({ title: "H1 Challenge", spaceId, templateId, startDate, endDate, status: "active" }),
-});
-expectStatus(result.response, 201, result.body);
+const challengeBody = { title: "H1 Challenge", templateId: privateTemplateId, startDate, endDate, status: "active" };
 
-result = await request("/challenges", {
-  method: "POST",
-  ...json({ title: "H2 Challenge", spaceId, templateId, startDate, endDate, status: "active" }),
-});
-expectStatus(result.response, 201, result.body);
+await expectStatus(`/spaces/${spaceId}/challenges`, { method: "POST", token: tokenB, body: challengeBody }, 403);
+body = await expectStatus(`/spaces/${spaceId}/challenges`, { method: "POST", token: tokenA, body: challengeBody }, 201);
+const challengeId: string = body.id;
 
-result = await request("/challenges");
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 2, "Challenge list should contain both challenges");
-const challengeId = (result.body as Array<{ id: string }>)[0].id;
+body = await expectStatus(`/spaces/${spaceId}/challenges`, { token: tokenA }, 200);
+assert(body.length === 1, "Space should have one challenge");
 
-result = await request(`/challenges/${challengeId}`);
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "H1 Challenge", "Challenge lookup returned the wrong title");
+body = await expectStatus(`/challenges/${challengeId}`, { method: "PATCH", token: tokenA, body: { title: "Updated Challenge" } }, 200);
+assert(body.title === "Updated Challenge", "Challenge update did not change the title");
+await expectStatus(`/challenges/${challengeId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
 
-result = await request(`/challenges/${challengeId}`, {
-  method: "PATCH",
-  ...json({ title: "Updated Challenge" }),
-});
-expectStatus(result.response, 200, result.body);
-assert((result.body as { title: string }).title === "Updated Challenge", "Challenge update did not change the title");
+// Participants
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 1", age: 30, gender: "male" } }, 201);
+const participant1Token: string = body.accessToken;
+const participant1Refresh: string = body.refreshToken;
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 2" } }, 201);
+const participant2Token: string = body.accessToken;
+await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 2" } }, 400);
 
-const participantId = (await db.select().from(participants))[0].id;
-result = await request("/challenge-results", {
-  method: "POST",
-  ...json({ challengeId, participantId, rawMetrics: { repetitions: 10 } }),
-});
-expectStatus(result.response, 201, result.body);
+await expectStatus("/users/me", { token: participant1Token }, 403);
+await expectStatus("/spaces", { method: "POST", token: participant1Token, body: { title: "Nope" } }, 403);
 
-result = await request("/challenge-results");
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 1, "Result list should contain the created result");
-const challengeResultId = (result.body as Array<{ id: string }>)[0].id;
+body = await expectStatus("/participants/me", { token: participant1Token }, 200);
+assert(body.name === "Participant 1", "GET /participants/me returned the wrong participant");
 
-result = await request(`/challenge-results/${challengeResultId}`);
-expectStatus(result.response, 200, result.body);
-assert(
-  (result.body as { challengeId: string }).challengeId === challengeId,
-  "Result lookup returned the wrong challenge"
+body = await expectStatus(`/spaces/${spaceId}/participants`, { token: tokenA }, 200);
+assert(body.length === 2, "Space should have two participants");
+await expectStatus(`/spaces/${spaceId}/participants`, { token: tokenB }, 403);
+
+body = await expectStatus(`/spaces/${spaceId}/challenges`, { token: participant1Token }, 200);
+assert(body.length === 1, "Participant should see the space's challenges");
+await expectStatus(`/challenges/${challengeId}`, { token: participant1Token }, 200);
+await expectStatus(`/challenges/${challengeId}`, { method: "DELETE", token: participant1Token }, 403);
+
+// Challenge results
+await expectStatus(`/challenges/${challengeId}/results`, { method: "POST", token: tokenA, body: { rawMetrics: { repetitions: 1 } } }, 403);
+body = await expectStatus(
+  `/challenges/${challengeId}/results`,
+  { method: "POST", token: participant1Token, body: { rawMetrics: { repetitions: 10 } } },
+  201
 );
+const challengeResultId: string = body.id;
 
-result = await request(`/challenge-results/${challengeResultId}`, {
-  method: "PATCH",
-  ...json({ rawMetrics: { repetitions: 12 } }),
-});
-expectStatus(result.response, 200, result.body);
-assert(
-  (result.body as { rawMetrics: { repetitions: number } }).rawMetrics.repetitions === 12,
-  "Result update did not change raw metrics"
+body = await expectStatus(`/challenges/${challengeId}/results`, { token: participant2Token }, 200);
+assert(body.length === 1, "Leaderboard should be visible to other participants");
+body = await expectStatus(`/challenges/${challengeId}/results`, { token: tokenA }, 200);
+assert(body.length === 1, "Leaderboard should be visible to the organizer");
+await expectStatus(`/challenges/${challengeId}/results`, { token: tokenB }, 403);
+
+await expectStatus(`/challenge-results/${challengeResultId}`, { token: tokenA }, 200);
+await expectStatus(`/challenge-results/${challengeResultId}`, { token: tokenB }, 403);
+
+await expectStatus(
+  `/challenge-results/${challengeResultId}`,
+  { method: "PATCH", token: participant2Token, body: { rawMetrics: { repetitions: 99 } } },
+  403
 );
+body = await expectStatus(
+  `/challenge-results/${challengeResultId}`,
+  { method: "PATCH", token: participant1Token, body: { rawMetrics: { repetitions: 12 } } },
+  200
+);
+assert(body.rawMetrics.repetitions === 12, "Result update did not change raw metrics");
 
-result = await request(`/challenges/${challengeId}/results`);
-expectStatus(result.response, 200, result.body);
-assert(Array.isArray(result.body) && result.body.length === 1, "Challenge results should contain the created result");
+// Admin sees everything
+await expectStatus("/spaces", { token: tokenA }, 403);
+await expectStatus("/spaces", { token: participant1Token }, 403);
+body = await expectStatus("/spaces", { token: tokenAdmin }, 200);
+assert(body.length === 1, "Admin should see all spaces");
+await expectStatus(`/spaces/${spaceId}`, { token: tokenAdmin }, 200);
+await expectStatus(`/templates/${privateTemplateId}`, { token: tokenAdmin }, 200);
+body = await expectStatus("/templates", { token: tokenAdmin }, 200);
+assert(body.length === 2, "Admin should see private templates too");
+body = await expectStatus("/challenges", { token: tokenAdmin }, 200);
+assert(body.length === 1, "Admin should see all challenges");
+body = await expectStatus("/challenge-results", { token: tokenAdmin }, 200);
+assert(body.length === 1, "Admin should see all results");
+await expectStatus("/challenge-results", { token: tokenA }, 403);
+body = await expectStatus("/participants", { token: tokenAdmin }, 200);
+assert(body.length === 2, "Admin should see all participants");
+await expectStatus(`/challenges/${challengeId}/results`, { token: tokenAdmin }, 200);
+body = await expectStatus(`/users/${userAId}`, { token: tokenAdmin }, 200);
+assert(body.email === organizerA.email, "Admin user lookup returned the wrong user");
+await expectStatus(`/users/${userAId}`, { token: tokenB }, 403);
 
-result = await request(`/challenge-results/${challengeResultId}`, { method: "DELETE" });
-expectStatus(result.response, 204, result.body);
+body = await expectStatus("/participants/me/results", { token: participant1Token }, 200);
+assert(body.length === 1, "Participant 1 should have one result");
+body = await expectStatus("/participants/me/results", { token: participant2Token }, 200);
+assert(body.length === 0, "Participant 2 should have no results");
 
-result = await request(`/challenges/${challengeId}/results`);
-expectStatus(result.response, 404, result.body);
+await expectStatus(`/challenge-results/${challengeResultId}`, { method: "DELETE", token: participant2Token }, 403);
+await expectStatus(`/challenge-results/${challengeResultId}`, { method: "DELETE", token: participant1Token }, 204);
 
-result = await request(`/challenges/${challengeId}`, { method: "DELETE" });
-expectStatus(result.response, 204, result.body);
+body = await expectStatus(`/challenges/${challengeId}/results`, { token: tokenA }, 200);
+assert(body.length === 0, "Results should be empty after deletion");
 
-result = await request(`/spaces/${spaceId}`, { method: "DELETE" });
-expectStatus(result.response, 204, result.body);
+// Participant refresh
+body = await expectStatus("/auth/refresh", { method: "POST", body: { refreshToken: participant1Refresh } }, 200);
+await expectStatus("/participants/me", { token: body.accessToken }, 200);
 
-result = await request(`/templates/${templateId}`, { method: "DELETE" });
-expectStatus(result.response, 204, result.body);
+// Cleanup through the API
+body = await expectStatus(`/templates/${privateTemplateId}`, { method: "DELETE", token: tokenA }, 409);
+assert(!("details" in body), "Error responses must not leak database details");
+await expectStatus(`/challenges/${challengeId}`, { method: "DELETE", token: tokenA }, 204);
+await expectStatus(`/spaces/${spaceId}`, { method: "DELETE", token: tokenA }, 204);
+await expectStatus(`/templates/${privateTemplateId}`, { method: "DELETE", token: tokenA }, 204);
+await expectStatus(`/templates/${publicTemplateId}`, { method: "DELETE", token: tokenA }, 204);
 
-result = await request(`/users/${userId}`, { method: "DELETE" });
-expectStatus(result.response, 204, result.body);
+// Logout revokes the refresh token
+await expectStatus("/auth/logout", { method: "POST", body: { refreshToken: refreshB } }, 204);
+await expectStatus("/auth/refresh", { method: "POST", body: { refreshToken: refreshB } }, 401);
+
+await expectStatus("/users/me", { method: "DELETE", token: tokenA }, 204);
+await expectStatus("/users/me", { method: "DELETE", token: tokenB }, 204);
+await expectStatus("/users/me", { method: "DELETE", token: tokenAdmin }, 204);
 
 console.log("API smoke test passed.");
 await db.$client.end();

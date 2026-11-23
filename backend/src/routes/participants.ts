@@ -1,178 +1,98 @@
 import { Hono } from "hono";
 
 import * as v from "valibot";
-import { validator, resolver, describeRoute } from "hono-openapi";
+import { resolver, describeRoute } from "hono-openapi";
 
-import db, { spaces, users } from "../db";
-import { and, eq } from "drizzle-orm/sql/expressions/conditions";
-import { spaceResponseSchema } from "./spaces";
-
-const uuidSchema = v.pipe(v.string(), v.uuid());
-
-const idParamSchema = v.object({
-  id: uuidSchema,
-});
-
-const registerSchema = v.object({
-  email: v.pipe(v.string(), v.email()),
-  password: v.pipe(v.string(), v.minLength(8)),
-  name: v.pipe(v.string(), v.minLength(1), v.maxLength(255)),
-});
-
-const loginSchema = v.object({
-  email: v.pipe(v.string(), v.email()),
-  password: v.pipe(v.string(), v.minLength(8)),
-});
-
-const userResponseSchema = v.object({
-  id: uuidSchema,
-  email: v.string(),
-  name: v.string(),
-  createdAt: v.string(),
-});
+import db, { challenge_results, participants } from "../db";
+import { eq } from "drizzle-orm/sql/expressions/conditions";
+import { participantResponseSchema, challengeResultResponseSchema } from "shared";
+import { bearerSecurity, requireAdmin, requireParticipant } from "../auth";
 
 const app = new Hono();
 
-app.post(
-  "/register",
+app.get(
+  "/",
   describeRoute({
-    operationId: "Register User",
-    description: "Register a new user",
-    tags: ["Users"],
-    responses: {
-      201: {
-        description: "User created successfully",
-      },
-      500: {
-        description: "Failed to register user",
-      },
-    },
-  }),
-  validator("json", registerSchema),
-  async (c) => {
-    const body = c.req.valid("json");
-
-    const passwordHash = body.password;
-
-    try {
-      await db.insert(users).values({
-        email: body.email,
-        name: body.name,
-        passwordHash: passwordHash,
-      });
-    } catch (error) {
-      return c.json({ error: "Failed to create user", details: error }, 500);
-    }
-
-    return c.body(null, 201);
-  }
-);
-
-app.post(
-  "/login",
-  describeRoute({
-    operationId: "Login as User",
-    description: "Login as an existing user",
-    tags: ["Users"],
+    operationId: "Get Participants",
+    tags: ["Participants", "Admin"],
+    description: "Get all participants (admin only). Organizers use GET /spaces/:id/participants.",
+    security: bearerSecurity,
     responses: {
       200: {
-        description: "User logged in successfully",
+        description: "A list of participants",
         content: {
           "application/json": {
-            schema: resolver(userResponseSchema),
+            schema: resolver(v.array(participantResponseSchema)),
           },
         },
       },
-      401: {
-        description: "Invalid email or password",
-      },
+      401: { description: "Not authenticated" },
+      403: { description: "Admin role required" },
     },
   }),
-  validator("json", loginSchema),
+  requireAdmin,
   async (c) => {
-    const body = c.req.valid("json");
-
-    const userList = await db.select().from(users).where(eq(users.email, body.email));
-    if (!userList || userList.length === 0) {
-      return c.json({ error: "Invalid email" }, 401);
-    }
-
-    const user = userList[0];
-
-    const passwordHash = await Bun.password.hash(body.password);
-    const isPasswordValid = await Bun.password.verify(user.passwordHash, passwordHash);
-    if (!isPasswordValid) {
-      return c.json({ error: "Invalid password" }, 401);
-    }
-
-    const userResponse = {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      createdAt: user.createdAt.toISOString(),
-    };
-
-    return c.json(userResponse, 200);
-  }
-);
-
-app.delete(
-  "/:id",
-  describeRoute({
-    operationId: "Delete User",
-    tags: ["Users"],
-    description: "Delete a user by its ID",
-    responses: {
-      204: {
-        description: "User deleted successfully",
-      },
-      404: {
-        description: "User not found",
-      },
-    },
-  }),
-  validator("param", idParamSchema),
-  async (c) => {
-    const userId = c.req.param("id");
-
-    const deletedUser = await db.delete(users).where(eq(users.id, userId)).returning();
-
-    if (!deletedUser || deletedUser.length === 0) {
-      return c.body(null, 404);
-    }
-
-    return c.body(null, 204);
+    return c.json(await db.select().from(participants), 200);
   }
 );
 
 app.get(
-  "/:id/spaces",
+  "/me",
   describeRoute({
-    operationId: "Get User Spaces",
-    tags: ["Users"],
-    description: "Get all spaces for a user",
+    operationId: "Get Current Participant",
+    tags: ["Participants"],
+    description: "Get the authenticated participant",
+    security: bearerSecurity,
     responses: {
       200: {
-        description: "A list of spaces for the user",
+        description: "The current participant",
         content: {
           "application/json": {
-            schema: resolver(v.array(spaceResponseSchema)),
+            schema: resolver(participantResponseSchema),
           },
         },
       },
+      401: { description: "Not authenticated" },
+      403: { description: "Participant role required" },
     },
   }),
+  requireParticipant,
   async (c) => {
-    const userId = c.req.param("id");
-
-    const userList = await db.select().from(users).where(eq(users.id, userId));
-    if (!userList || userList.length === 0) {
+    const [participant] = await db.select().from(participants).where(eq(participants.id, c.var.participant.id));
+    if (!participant) {
       return c.body(null, 404);
     }
+    return c.json(participant, 200);
+  }
+);
 
-    const userSpaces = await db.select().from(spaces).where(eq(spaces.organizerId, userId));
-
-    return c.json(userSpaces, 200);
+app.get(
+  "/me/results",
+  describeRoute({
+    operationId: "Get Current Participant Results",
+    tags: ["Participants"],
+    description: "Get the result history of the authenticated participant",
+    security: bearerSecurity,
+    responses: {
+      200: {
+        description: "A list of the participant's results",
+        content: {
+          "application/json": {
+            schema: resolver(v.array(challengeResultResponseSchema)),
+          },
+        },
+      },
+      401: { description: "Not authenticated" },
+      403: { description: "Participant role required" },
+    },
+  }),
+  requireParticipant,
+  async (c) => {
+    const results = await db
+      .select()
+      .from(challenge_results)
+      .where(eq(challenge_results.participantId, c.var.participant.id));
+    return c.json(results, 200);
   }
 );
 

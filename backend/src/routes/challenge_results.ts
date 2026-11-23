@@ -1,46 +1,39 @@
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 
 import * as v from "valibot";
 import { validator, resolver, describeRoute } from "hono-openapi";
 
 import db, { challenge_results } from "../db";
 import { eq } from "drizzle-orm/sql/expressions/conditions";
+import { idParamSchema, updateChallengeResultSchema, challengeResultResponseSchema } from "shared";
+import {
+  bearerSecurity,
+  loadChallengeForCaller,
+  requireAdmin,
+  requireParticipant,
+  requireSpaceMember,
+  type Caller,
+} from "../auth";
 
-const uuidSchema = v.pipe(v.string(), v.uuid());
-
-const idParamSchema = v.object({
-  id: uuidSchema,
-});
-
-const jsonObjectSchema = v.record(v.string(), v.unknown());
-
-const postChallengeResultsSchema = v.object({
-  challengeId: uuidSchema,
-  participantId: uuidSchema,
-  rawMetrics: jsonObjectSchema,
-});
-
-const patchChallengeResultsSchema = v.object({
-  rawMetrics: v.optional(jsonObjectSchema),
-});
-
-export const challengeResultResponseSchema = v.object({
-  id: uuidSchema,
-  challengeId: uuidSchema,
-  participantId: uuidSchema,
-  rawMetrics: jsonObjectSchema,
-  createdAt: v.string(),
-  updatedAt: v.string(),
-});
+const loadResultForCaller = async (resultId: string, caller: Caller) => {
+  const [result] = await db.select().from(challenge_results).where(eq(challenge_results.id, resultId));
+  if (!result) {
+    throw new HTTPException(404, { message: "Challenge result not found" });
+  }
+  await loadChallengeForCaller(result.challengeId, caller);
+  return result;
+};
 
 const app = new Hono();
 
 app.get(
   "/",
   describeRoute({
-    operationId: "Get Challenge Results",
-    tags: ["Challenges Results"],
-    description: "Get all challenge results",
+    operationId: "Get All Challenge Results",
+    tags: ["Challenges Results", "Admin"],
+    description: "Get all challenge results (admin only). Others use GET /challenges/:id/results.",
+    security: bearerSecurity,
     responses: {
       200: {
         description: "A list of challenge results",
@@ -50,45 +43,13 @@ app.get(
           },
         },
       },
+      401: { description: "Not authenticated" },
+      403: { description: "Admin role required" },
     },
   }),
+  requireAdmin,
   async (c) => {
-    const allChallengeResults = await db.select().from(challenge_results);
-    return c.json(allChallengeResults, 200);
-  }
-);
-
-app.post(
-  "/",
-  describeRoute({
-    operationId: "Create Challenge Result",
-    description: "Create a new challenge result",
-    tags: ["Challenges Results"],
-    responses: {
-      201: {
-        description: "Challenge created successfully",
-      },
-      500: {
-        description: "Failed to create challenge",
-      },
-    },
-  }),
-  validator("json", postChallengeResultsSchema),
-  async (c) => {
-    const body = c.req.valid("json");
-
-    try {
-      await db.insert(challenge_results).values({
-        challengeId: body.challengeId,
-        participantId: body.participantId,
-        rawMetrics: body.rawMetrics,
-        totalScore: "0.00",
-      });
-    } catch (error) {
-      return c.json({ error: "Failed to create challenge result", details: error }, 500);
-    }
-
-    return c.body(null, 201);
+    return c.json(await db.select().from(challenge_results), 200);
   }
 );
 
@@ -97,28 +58,27 @@ app.get(
   describeRoute({
     operationId: "Get Challenge Result",
     tags: ["Challenges Results"],
-    description: "Get a challenge result by its ID",
+    description: "Get a challenge result by its ID. Available to the space organizer and its participants.",
+    security: bearerSecurity,
     responses: {
       200: {
-        description: "Challenge found",
+        description: "Challenge result found",
         content: {
           "application/json": {
             schema: resolver(challengeResultResponseSchema),
           },
         },
       },
+      401: { description: "Not authenticated" },
+      403: { description: "No access to this result" },
+      404: { description: "Challenge result not found" },
     },
   }),
+  requireSpaceMember,
   validator("param", idParamSchema),
   async (c) => {
-    const challengeResultId = c.req.param("id");
-
-    const challengeList = await db.select().from(challenge_results).where(eq(challenge_results.id, challengeResultId));
-    if (!challengeList || challengeList.length === 0) {
-      return c.body(null, 404);
-    }
-
-    return c.json(challengeList[0], 200);
+    const result = await loadResultForCaller(c.req.valid("param").id, c.var.caller);
+    return c.json(result, 200);
   }
 );
 
@@ -127,38 +87,43 @@ app.patch(
   describeRoute({
     operationId: "Update Challenge Result",
     tags: ["Challenges Results"],
-    description: "Update a challenge result by its ID",
+    description: "Update a result submitted by the authenticated participant",
+    security: bearerSecurity,
     responses: {
       200: {
-        description: "Challenge updated successfully",
+        description: "Challenge result updated successfully",
         content: {
           "application/json": {
             schema: resolver(challengeResultResponseSchema),
           },
         },
       },
-      404: {
-        description: "Challenge not found",
-      },
+      401: { description: "Not authenticated" },
+      403: { description: "You can only update your own results" },
+      404: { description: "Challenge result not found" },
     },
   }),
+  requireParticipant,
   validator("param", idParamSchema),
-  validator("json", patchChallengeResultsSchema),
+  validator("json", updateChallengeResultSchema),
   async (c) => {
-    const challengeResultId = c.req.param("id");
-    const updatedData = c.req.valid("json");
-
-    const updatedChallenge = await db
-      .update(challenge_results)
-      .set(updatedData)
-      .where(eq(challenge_results.id, challengeResultId))
-      .returning();
-
-    if (!updatedChallenge || updatedChallenge.length === 0) {
-      return c.body(null, 404);
+    const participant = c.var.participant;
+    const result = await loadResultForCaller(c.req.valid("param").id, { kind: "participant", participant });
+    if (result.participantId !== participant.id) {
+      throw new HTTPException(403, { message: "You can only update your own results" });
     }
 
-    return c.json(updatedChallenge[0], 200);
+    const updatedData = c.req.valid("json");
+    if (Object.keys(updatedData).length === 0) {
+      return c.json(result, 200);
+    }
+
+    const [updated] = await db
+      .update(challenge_results)
+      .set(updatedData)
+      .where(eq(challenge_results.id, result.id))
+      .returning();
+    return c.json(updated, 200);
   }
 );
 
@@ -167,29 +132,25 @@ app.delete(
   describeRoute({
     operationId: "Delete Challenge Result",
     tags: ["Challenges Results"],
-    description: "Delete a challenge result by its ID",
+    description: "Delete a result. Allowed for the participant who submitted it and the space organizer.",
+    security: bearerSecurity,
     responses: {
-      204: {
-        description: "Challenge result deleted successfully",
-      },
-      404: {
-        description: "Challenge result not found",
-      },
+      204: { description: "Challenge result deleted successfully" },
+      401: { description: "Not authenticated" },
+      403: { description: "No permission to delete this result" },
+      404: { description: "Challenge result not found" },
     },
   }),
+  requireSpaceMember,
   validator("param", idParamSchema),
   async (c) => {
-    const challengeResultId = c.req.param("id");
-
-    const deletedChallenge = await db
-      .delete(challenge_results)
-      .where(eq(challenge_results.id, challengeResultId))
-      .returning();
-
-    if (!deletedChallenge || deletedChallenge.length === 0) {
-      return c.body(null, 404);
+    const caller = c.var.caller;
+    const result = await loadResultForCaller(c.req.valid("param").id, caller);
+    if (caller.kind === "participant" && result.participantId !== caller.participant.id) {
+      throw new HTTPException(403, { message: "You can only delete your own results" });
     }
 
+    await db.delete(challenge_results).where(eq(challenge_results.id, result.id));
     return c.body(null, 204);
   }
 );
