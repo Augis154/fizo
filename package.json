@@ -3,10 +3,11 @@
   "private": true,
   "workspaces": [
     "backend",
+    "frontend",
     "shared"
   ],
   "scripts": {
-    "dev": "bun --filter '*' dev",
+    "dev": "bun --parallel --filter '*' dev",
     "build": "bun --filter '*' build",
     "db:push": "bun --filter backend db:push",
     "db:migrate": "bun --filter backend db:migrate",
