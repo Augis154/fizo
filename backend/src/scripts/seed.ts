@@ -1,3 +1,5 @@
+import { ParticipantGender, scoreResult, type Exercise, type ScoringBracket, type TemplateConfig } from "shared";
+
 import db, { challenge_results, challenges, participants, refreshTokens, spaces, templates, users } from "../db";
 
 const PASSWORD = "password123";
@@ -13,43 +15,241 @@ const random = () => {
 };
 const between = (min: number, max: number) => Math.round(min + random() * (max - min));
 
-type Exercise = { key: string; name: string; unit: "reps" | "seconds" | "kg"; higherIsBetter: boolean; range: [number, number] };
+/**
+ * Points ladder used to build the army test's lookup tables. Giving the 60- and 100-point
+ * thresholds for a group and interpolating between them keeps the tables readable while producing
+ * the same threshold-lookup shape as the real FIZO202 tables.
+ *
+ * The numbers below are illustrative, not the official FIZO202 norms — the real tables come from
+ * `202.xlsx`, which is not in this repo. Replace these brackets with the imported rows when it is.
+ */
+const POINTS_LADDER = [60, 70, 80, 90, 100];
+
+const band = (sixty: number, hundred: number) =>
+  POINTS_LADDER.map((points) => ({
+    points,
+    value: Math.round(sixty + ((hundred - sixty) * (points - 60)) / 40),
+  }));
+
+/** Age bands, youngest first. The first matching bracket wins, so order matters. */
+const ageBands = [{ maxAge: 29 }, { minAge: 30, maxAge: 39 }, { minAge: 40, maxAge: 49 }, { minAge: 50 }];
+
+/**
+ * Builds brackets for both genders across the four age bands. `male` and `female` each give the
+ * `[60pt, 100pt]` thresholds per age band, youngest first.
+ */
+const genderedBrackets = (
+  male: [number, number][],
+  female: [number, number][]
+): [ScoringBracket, ...ScoringBracket[]] => {
+  const brackets = ([ParticipantGender.Male, ParticipantGender.Female] as const).flatMap((gender) =>
+    (gender === ParticipantGender.Male ? male : female).map((thresholds, index) => ({
+      gender,
+      ...ageBands[index],
+      rows: band(...thresholds),
+    }))
+  );
+  return brackets as [ScoringBracket, ...ScoringBracket[]];
+};
 
 const armyExercises: Exercise[] = [
-  { key: "pushups", name: "Atsispaudimai per 2 min.", unit: "reps", higherIsBetter: true, range: [20, 75] },
-  { key: "situps", name: "Atsilenkimai per 2 min.", unit: "reps", higherIsBetter: true, range: [30, 90] },
-  { key: "run3km", name: "3 km bėgimas", unit: "seconds", higherIsBetter: false, range: [690, 1200] },
+  {
+    key: "pushups",
+    name: "Atsispaudimai",
+    unit: "reps",
+    input: "number",
+    higherIsBetter: true,
+    required: true,
+    passPoints: 60,
+    scoring: {
+      kind: "table",
+      maxPoints: 100,
+      brackets: genderedBrackets(
+        [
+          [44, 75],
+          [38, 68],
+          [32, 60],
+          [26, 50],
+        ],
+        [
+          [22, 45],
+          [18, 40],
+          [14, 34],
+          [10, 28],
+        ]
+      ),
+    },
+  },
+  {
+    key: "situps",
+    name: "Atsilenkimai",
+    unit: "reps",
+    input: "number",
+    higherIsBetter: true,
+    required: true,
+    passPoints: 60,
+    scoring: {
+      kind: "table",
+      maxPoints: 100,
+      brackets: genderedBrackets(
+        [
+          [48, 90],
+          [43, 82],
+          [38, 74],
+          [32, 64],
+        ],
+        [
+          [40, 80],
+          [35, 72],
+          [30, 64],
+          [24, 54],
+        ]
+      ),
+    },
+  },
+  {
+    key: "run3km",
+    // Lower is better, so the 60-point threshold is the slower time.
+    name: "3 km bėgimas",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    passPoints: 60,
+    scoring: {
+      kind: "table",
+      maxPoints: 100,
+      brackets: genderedBrackets(
+        [
+          [900, 690],
+          [960, 720],
+          [1020, 780],
+          [1110, 840],
+        ],
+        [
+          [1050, 810],
+          [1110, 840],
+          [1170, 900],
+          [1260, 960],
+        ]
+      ),
+    },
+  },
 ];
 
+/** Hyrox is raced, not scored: the finish time is the result, so no exercise awards points. */
 const hyroxExercises: Exercise[] = [
-  { key: "skiErg", name: "SkiErg 1000 m", unit: "seconds", higherIsBetter: false, range: [220, 330] },
-  { key: "sledPush", name: "Sled Push 50 m", unit: "seconds", higherIsBetter: false, range: [120, 300] },
-  { key: "rowing", name: "Irklavimas 1000 m", unit: "seconds", higherIsBetter: false, range: [220, 320] },
-  { key: "wallBalls", name: "Wall Balls x100", unit: "seconds", higherIsBetter: false, range: [240, 480] },
-  { key: "run8km", name: "Bėgimas 8 x 1 km", unit: "seconds", higherIsBetter: false, range: [1800, 3000] },
+  {
+    key: "skiErg",
+    name: "SkiErg 1000 m",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    scoring: { kind: "none" },
+  },
+  {
+    key: "sledPush",
+    name: "Sled Push 50 m",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    scoring: { kind: "none" },
+  },
+  {
+    key: "rowing",
+    name: "Irklavimas 1000 m",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    scoring: { kind: "none" },
+  },
+  {
+    key: "wallBalls",
+    name: "Wall Balls x100",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    scoring: { kind: "none" },
+  },
+  {
+    key: "run8km",
+    name: "Bėgimas 8 x 1 km",
+    unit: "seconds",
+    input: "time",
+    higherIsBetter: false,
+    required: true,
+    scoring: { kind: "none" },
+  },
 ];
 
+/** A hand-made template: straight-line scoring between a "zero" and a "full marks" value. */
 const wodExercises: Exercise[] = [
-  { key: "pullups", name: "Prisitraukimai", unit: "reps", higherIsBetter: true, range: [3, 25] },
-  { key: "deadlift", name: "Mirties trauka 1RM", unit: "kg", higherIsBetter: true, range: [80, 220] },
+  {
+    key: "pullups",
+    name: "Prisitraukimai",
+    unit: "reps",
+    input: "number",
+    higherIsBetter: true,
+    required: true,
+    scoring: { kind: "linear", zero: 3, full: 25, maxPoints: 100 },
+  },
+  {
+    key: "deadlift",
+    name: "Štangos kėlimas",
+    unit: "kg",
+    input: "number",
+    higherIsBetter: true,
+    required: false,
+    scoring: { kind: "linear", zero: 80, full: 220, maxPoints: 100 },
+  },
 ];
 
-const toConfig = (exercises: Exercise[]) => ({
-  exercises: exercises.map(({ range, ...exercise }) => exercise),
-});
-
-const generateMetrics = (exercises: Exercise[]) =>
-  Object.fromEntries(exercises.map((e) => [e.key, between(...e.range)]));
-
-// Placeholder scoring (0-100 per exercise, averaged) until real template scoring exists.
-const scoreMetrics = (exercises: Exercise[], metrics: Record<string, number>) => {
-  const total = exercises.reduce((sum, e) => {
-    const [min, max] = e.range;
-    const normalized = (metrics[e.key] - min) / (max - min);
-    return sum + (e.higherIsBetter ? normalized : 1 - normalized) * 100;
-  }, 0);
-  return (total / exercises.length).toFixed(2);
+const armyConfig: TemplateConfig = {
+  exercises: armyExercises,
+  requiresAge: true,
+  requiresGender: true,
+  aggregate: { kind: "sum", passTotal: 180 },
 };
+
+const hyroxConfig: TemplateConfig = {
+  exercises: hyroxExercises,
+  requiresAge: false,
+  requiresGender: false,
+  aggregate: { kind: "rawTimeSum" },
+};
+
+const wodConfig: TemplateConfig = {
+  exercises: wodExercises,
+  requiresAge: false,
+  requiresGender: false,
+  aggregate: { kind: "average", passTotal: 50 },
+};
+
+/** Plausible measurement ranges, used only to invent seed data. */
+const seedRanges: Record<string, [number, number]> = {
+  pushups: [20, 75],
+  situps: [30, 90],
+  run3km: [690, 1200],
+  skiErg: [220, 330],
+  sledPush: [120, 300],
+  rowing: [220, 320],
+  wallBalls: [240, 480],
+  run8km: [1800, 3000],
+  pullups: [3, 25],
+  deadlift: [80, 220],
+};
+
+const generateMetrics = (config: TemplateConfig) =>
+  Object.fromEntries(
+    config.exercises
+      // Optional exercises are sometimes left out, as the result form allows.
+      .filter((exercise) => exercise.required || random() > 0.3)
+      .map((exercise) => [exercise.key, between(...seedRanges[exercise.key])])
+  );
 
 const firstNames = {
   male: ["Jonas", "Tomas", "Mantas", "Lukas", "Paulius", "Darius", "Andrius", "Karolis"],
@@ -62,9 +262,9 @@ const lastNames = {
 
 const generateParticipants = (count: number) => {
   const used = new Set<string>();
-  const result: { name: string; age: number | null; gender: "male" | "female" | null }[] = [];
+  const result: { name: string; age: number | null; gender: ParticipantGender | null }[] = [];
   while (result.length < count) {
-    const gender = random() < 0.5 ? "male" : "female";
+    const gender = random() < 0.5 ? ParticipantGender.Male : ParticipantGender.Female;
     const first = firstNames[gender][between(0, firstNames[gender].length - 1)];
     const last = lastNames[gender][between(0, lastNames[gender].length - 1)];
     const name = `${first} ${last}`;
@@ -106,17 +306,17 @@ await db.transaction(async (tx) => {
         title: "Kariuomenės fizinio parengtumo testas",
         type: "army_pft",
         isPublic: true,
-        config: toConfig(armyExercises),
+        config: armyConfig,
       },
-      { creatorId: ieva.id, title: "Hyrox", type: "hyrox", isPublic: true, config: toConfig(hyroxExercises) },
-      { creatorId: jonas.id, title: "Jono privatus WOD", type: "custom", isPublic: false, config: toConfig(wodExercises) },
+      { creatorId: ieva.id, title: "Hyrox", type: "hyrox", isPublic: true, config: hyroxConfig },
+      { creatorId: jonas.id, title: "Jono privatus WOD", type: "custom", isPublic: false, config: wodConfig },
     ])
     .returning();
 
-  const exercisesByTemplate = new Map([
-    [armyTemplate.id, armyExercises],
-    [hyroxTemplate.id, hyroxExercises],
-    [wodTemplate.id, wodExercises],
+  const configByTemplate = new Map([
+    [armyTemplate.id, armyConfig],
+    [hyroxTemplate.id, hyroxConfig],
+    [wodTemplate.id, wodConfig],
   ]);
 
   const spaceDefinitions = [
@@ -148,7 +348,13 @@ await db.transaction(async (tx) => {
       challenges: [
         { title: "Hyrox treniruočių iššūkis", templateId: hyroxTemplate.id, start: -30, end: -1, status: "finished" },
         { title: "Hyrox Kaunas finalas", templateId: hyroxTemplate.id, start: -2, end: 5, status: "active" },
-        { title: "Kariuomenės testas Hyrox sportininkams", templateId: armyTemplate.id, start: -3, end: 20, status: "active" },
+        {
+          title: "Kariuomenės testas Hyrox sportininkams",
+          templateId: armyTemplate.id,
+          start: -3,
+          end: 20,
+          status: "active",
+        },
       ],
     },
   ];
@@ -176,7 +382,7 @@ await db.transaction(async (tx) => {
 
       if (c.status === "upcoming") continue;
 
-      const exercises = exercisesByTemplate.get(c.templateId)!;
+      const config = configByTemplate.get(c.templateId)!;
       const resultsEnd = Math.min(endDate.getTime(), now);
 
       for (const participant of spaceParticipants) {
@@ -184,13 +390,16 @@ await db.transaction(async (tx) => {
         // Participants may submit several attempts during a challenge.
         const attempts = between(1, 3);
         for (let i = 0; i < attempts; i++) {
-          const rawMetrics = generateMetrics(exercises);
+          const rawMetrics = generateMetrics(config);
+          // Scored with the same shared code the API uses, so seeded data matches real submissions.
+          const scores = scoreResult(config, rawMetrics, participant);
           const submittedAt = new Date(startDate.getTime() + random() * (resultsEnd - startDate.getTime()));
           await tx.insert(challenge_results).values({
             challengeId: challenge.id,
             participantId: participant.id,
             rawMetrics,
-            totalScore: scoreMetrics(exercises, rawMetrics),
+            scores,
+            totalScore: scores.total.toFixed(2),
             createdAt: submittedAt,
             updatedAt: submittedAt,
           });
@@ -208,7 +417,7 @@ await db.transaction(async (tx) => {
   console.log(`  ${ieva.email} (organizer)`);
   console.log("\nJoin links (short IDs):");
   for (const definition of spaceDefinitions) {
-    console.log(`  POST /spaces/join/${definition.shortId}  ${definition.title}`);
+    console.log(`  /join/${definition.shortId}  ${definition.title}`);
   }
 });
 

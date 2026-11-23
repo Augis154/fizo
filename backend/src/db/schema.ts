@@ -1,5 +1,8 @@
-import { pgEnum, snakeCase } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgEnum, snakeCase, uniqueIndex } from "drizzle-orm/pg-core";
 import { uuid, varchar, text, boolean, timestamp, jsonb, integer, numeric } from "drizzle-orm/pg-core";
+
+import type { RawMetrics, ScoreBreakdown, TemplateConfig } from "shared";
 
 const table = snakeCase.table;
 
@@ -22,7 +25,7 @@ export const templates = table("template", {
   title: varchar({ length: 255 }).notNull(),
   type: varchar({ length: 50 }).notNull(),
   isPublic: boolean().default(true).notNull(),
-  config: jsonb().notNull(),
+  config: jsonb().$type<TemplateConfig>().notNull(),
   createdAt: timestamp().defaultNow().notNull(),
 });
 
@@ -51,16 +54,22 @@ export const challenges = table("challenge", {
   createdAt: timestamp().defaultNow().notNull(),
 });
 
-export const participants = table("participant", {
-  id: uuid().defaultRandom().primaryKey(),
-  spaceId: uuid()
-    .notNull()
-    .references(() => spaces.id, { onDelete: "cascade" }),
-  name: varchar({ length: 255 }).notNull(),
-  age: integer(),
-  gender: gender(),
-  createdAt: timestamp().defaultNow().notNull(),
-});
+export const participants = table(
+  "participant",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    spaceId: uuid()
+      .notNull()
+      .references(() => spaces.id, { onDelete: "cascade" }),
+    name: varchar({ length: 255 }).notNull(),
+    age: integer(),
+    gender: gender(),
+    createdAt: timestamp().defaultNow().notNull(),
+  },
+  // A participant is identified within a space by name alone, and rejoins by typing it again, so
+  // names must be unique per space regardless of case.
+  (t) => [uniqueIndex("participant_space_name_unique").on(t.spaceId, sql`lower(${t.name})`)]
+);
 
 export const refreshTokens = table("refresh_token", {
   id: uuid().defaultRandom().primaryKey(),
@@ -79,7 +88,9 @@ export const challenge_results = table("challenge_result", {
   participantId: uuid()
     .notNull()
     .references(() => participants.id, { onDelete: "cascade" }),
-  rawMetrics: jsonb().notNull(),
+  rawMetrics: jsonb().$type<RawMetrics>().notNull(),
+  // Snapshot of how totalScore was reached, so editing a template cannot rewrite past results.
+  scores: jsonb().$type<ScoreBreakdown>().notNull(),
   totalScore: numeric({ precision: 10, scale: 2 }).notNull(),
   createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp({ withTimezone: true })

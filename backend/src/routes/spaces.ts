@@ -19,6 +19,8 @@ import {
   challengeResponseSchema,
   participantResponseSchema,
 } from "shared";
+import { getPgErrorCode, PG_UNIQUE_VIOLATION } from "../db/errors";
+import { nameMatches } from "../participants";
 import {
   assertSpaceAccess,
   bearerSecurity,
@@ -94,7 +96,7 @@ const routes = new Hono()
     describeRoute({
       operationId: "Get Space",
       tags: ["Spaces"],
-      description: "Get a space owned by the caller",
+      description: "Get a space. Available to its organizer and its participants.",
       security: bearerSecurity,
       responses: {
         200: {
@@ -106,14 +108,20 @@ const routes = new Hono()
           },
         },
         401: { description: "Not authenticated" },
-        403: { description: "You do not own this space" },
+        403: { description: "No access to this space" },
         404: { description: "Space not found" },
       },
     }),
-    requireOrganizer,
+    requireSpaceMember,
     validator("param", idParamSchema),
     async (c) => {
-      const space = await loadOwnedSpace(c.req.valid("param").id, c.var.organizer);
+      const spaceId = c.req.valid("param").id;
+      await assertSpaceAccess(spaceId, c.var.caller);
+
+      const [space] = await db.select().from(spaces).where(eq(spaces.id, spaceId));
+      if (!space) {
+        return c.body(null, 404);
+      }
       return c.json(space, 200);
     }
   )
@@ -307,17 +315,28 @@ const routes = new Hono()
     describeRoute({
       operationId: "Join Space",
       tags: ["Spaces"],
-      description: "Join a space via its short ID and receive participant tokens",
+      description:
+        "Join a space via its short ID and receive participant tokens. Participants are identified " +
+        "by name within a space, so submitting a name that already joined returns that participant " +
+        "and their history instead of creating a new one — this is how someone gets back in after " +
+        "clearing their browser or switching device.",
       responses: {
-        201: {
-          description: "Successfully joined the space",
+        200: {
+          description: "Rejoined as an existing participant",
           content: {
             "application/json": {
               schema: resolver(joinSpaceResponseSchema),
             },
           },
         },
-        400: { description: "A participant with this name already exists in the space" },
+        201: {
+          description: "Successfully joined as a new participant",
+          content: {
+            "application/json": {
+              schema: resolver(joinSpaceResponseSchema),
+            },
+          },
+        },
         404: { description: "Space not found" },
       },
     }),
@@ -334,25 +353,64 @@ const routes = new Hono()
         return c.body(null, 404);
       }
 
+      const rejoin = async (participant: typeof participants.$inferSelect) => {
+        const tokens = await issueTokens({
+          kind: "participant",
+          participant: { id: participant.id, spaceId: participant.spaceId },
+        });
+        return { participant, ...tokens, rejoined: true as const };
+      };
+
       const [existing] = await db
         .select()
         .from(participants)
-        .where(and(eq(participants.spaceId, space.id), eq(participants.name, body.name)));
+        .where(and(eq(participants.spaceId, space.id), nameMatches(body.name)));
+
       if (existing) {
-        return c.json({ error: "Participant with this name already exists in the space" }, 400);
+        // Rejoining: hand back the existing participant so their results come with them. Age and
+        // gender are only overwritten when supplied, so rejoining with the fields left blank does
+        // not wipe details the participant has already filled in.
+        const details = {
+          ...(body.age !== undefined ? { age: body.age } : {}),
+          ...(body.gender !== undefined ? { gender: body.gender } : {}),
+        };
+
+        const participant =
+          Object.keys(details).length > 0
+            ? (await db.update(participants).set(details).where(eq(participants.id, existing.id)).returning())[0]
+            : existing;
+
+        return c.json(await rejoin(participant), 200);
       }
 
-      const [participant] = await db
-        .insert(participants)
-        .values({ spaceId: space.id, name: body.name, age: body.age, gender: body.gender })
-        .returning();
+      let created: typeof participants.$inferSelect;
+      try {
+        [created] = await db
+          .insert(participants)
+          .values({ spaceId: space.id, name: body.name, age: body.age, gender: body.gender })
+          .returning();
+      } catch (error) {
+        // Two devices can join the same name at once; the unique index lets one through and the
+        // loser rejoins rather than seeing a conflict.
+        if (getPgErrorCode(error) !== PG_UNIQUE_VIOLATION) {
+          throw error;
+        }
+        const [raced] = await db
+          .select()
+          .from(participants)
+          .where(and(eq(participants.spaceId, space.id), nameMatches(body.name)));
+        if (!raced) {
+          throw error;
+        }
+        return c.json(await rejoin(raced), 200);
+      }
 
       const tokens = await issueTokens({
         kind: "participant",
-        participant: { id: participant.id, spaceId: participant.spaceId },
+        participant: { id: created.id, spaceId: created.spaceId },
       });
 
-      return c.json({ participant, ...tokens }, 201);
+      return c.json({ participant: created, ...tokens, rejoined: false }, 201);
     }
   );
 

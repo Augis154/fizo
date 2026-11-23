@@ -1,4 +1,12 @@
-import db, { challenge_results, challenges, participants, refreshTokens, spaces, templates, users } from "./backend/src/db";
+import db, {
+  challenge_results,
+  challenges,
+  participants,
+  refreshTokens,
+  spaces,
+  templates,
+  users,
+} from "./backend/src/db";
 
 const API_URL = process.env.API_URL ?? "http://localhost:3000";
 
@@ -64,7 +72,10 @@ const organizerA = { email: "a@test.lt", name: "Organizer A", password: "passwor
 const organizerB = { email: "b@test.lt", name: "Organizer B", password: "password123" };
 
 body = await expectStatus("/auth/register", { method: "POST", body: organizerA }, 201);
-assert(body.user.email === organizerA.email && body.accessToken && body.refreshToken, "Register should log the user in");
+assert(
+  body.user.email === organizerA.email && body.accessToken && body.refreshToken,
+  "Register should log the user in"
+);
 await expectStatus("/users/me", { token: body.accessToken }, 200);
 await expectStatus("/auth/register", { method: "POST", body: organizerB }, 201);
 body = await expectStatus("/auth/register", { method: "POST", body: organizerA }, 409);
@@ -72,13 +83,21 @@ assert(!("details" in body), "Error responses must not leak database details");
 
 await expectStatus("/auth/login", { method: "POST", body: { email: organizerA.email, password: "wrongpass" } }, 401);
 
-body = await expectStatus("/auth/login", { method: "POST", body: { email: organizerA.email, password: organizerA.password } }, 200);
+body = await expectStatus(
+  "/auth/login",
+  { method: "POST", body: { email: organizerA.email, password: organizerA.password } },
+  200
+);
 assert(body.user.email === organizerA.email, "Login returned the wrong user");
 const userAId: string = body.user.id;
 let tokenA: string = body.accessToken;
 let refreshA: string = body.refreshToken;
 
-body = await expectStatus("/auth/login", { method: "POST", body: { email: organizerB.email, password: organizerB.password } }, 200);
+body = await expectStatus(
+  "/auth/login",
+  { method: "POST", body: { email: organizerB.email, password: organizerB.password } },
+  200
+);
 const tokenB: string = body.accessToken;
 const refreshB: string = body.refreshToken;
 
@@ -89,7 +108,11 @@ await db.insert(users).values({
   passwordHash: await Bun.password.hash(admin.password),
   role: "admin",
 });
-body = await expectStatus("/auth/login", { method: "POST", body: { email: admin.email, password: admin.password } }, 200);
+body = await expectStatus(
+  "/auth/login",
+  { method: "POST", body: { email: admin.email, password: admin.password } },
+  200
+);
 assert(body.user.role === "admin", "Admin login should report the admin role");
 const tokenAdmin: string = body.accessToken;
 
@@ -109,17 +132,34 @@ tokenA = body.accessToken;
 refreshA = body.refreshToken;
 
 // Templates
-body = await expectStatus(
-  "/templates",
-  { method: "POST", token: tokenA, body: { title: "Private", type: "test", isPublic: false, config: { reps: 10 } } },
-  201
-);
-const privateTemplateId: string = body.id;
-assert(body.config.reps === 10, "Template config should be preserved");
+// `config` is validated against the shared template schema, so these have to be real configs.
+const testConfig = {
+  exercises: [
+    {
+      key: "repetitions",
+      name: "Repetitions",
+      unit: "reps",
+      input: "number",
+      higherIsBetter: true,
+      required: true,
+      passPoints: 60,
+      scoring: { kind: "linear", zero: 0, full: 20, maxPoints: 100 },
+    },
+  ],
+  aggregate: { kind: "sum", passTotal: 60 },
+};
 
 body = await expectStatus(
   "/templates",
-  { method: "POST", token: tokenA, body: { title: "Public", type: "test", isPublic: true, config: {} } },
+  { method: "POST", token: tokenA, body: { title: "Private", type: "test", isPublic: false, config: testConfig } },
+  201
+);
+const privateTemplateId: string = body.id;
+assert(body.config.exercises[0].key === "repetitions", "Template config should be preserved");
+
+body = await expectStatus(
+  "/templates",
+  { method: "POST", token: tokenA, body: { title: "Public", type: "test", isPublic: true, config: testConfig } },
   201
 );
 const publicTemplateId: string = body.id;
@@ -131,7 +171,11 @@ assert(body.length === 2, "Organizer A should see both templates");
 
 await expectStatus(`/templates/${privateTemplateId}`, { token: tokenB }, 404);
 await expectStatus(`/templates/${publicTemplateId}`, { token: tokenB }, 200);
-await expectStatus(`/templates/${publicTemplateId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
+await expectStatus(
+  `/templates/${publicTemplateId}`,
+  { method: "PATCH", token: tokenB, body: { title: "Hijack" } },
+  403
+);
 await expectStatus(`/templates/${publicTemplateId}`, { method: "DELETE", token: tokenB }, 403);
 
 body = await expectStatus(
@@ -153,7 +197,11 @@ await expectStatus(`/spaces/${spaceId}`, { token: tokenB }, 403);
 await expectStatus(`/spaces/${spaceId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
 await expectStatus(`/spaces/${spaceId}`, { method: "DELETE", token: tokenB }, 403);
 
-body = await expectStatus(`/spaces/${spaceId}`, { method: "PATCH", token: tokenA, body: { title: "Updated Space" } }, 200);
+body = await expectStatus(
+  `/spaces/${spaceId}`,
+  { method: "PATCH", token: tokenA, body: { title: "Updated Space" } },
+  200
+);
 assert(body.title === "Updated Space", "Space update did not change the title");
 
 body = await expectStatus("/users/me/spaces", { token: tokenA }, 200);
@@ -178,17 +226,45 @@ const challengeId: string = body.id;
 body = await expectStatus(`/spaces/${spaceId}/challenges`, { token: tokenA }, 200);
 assert(body.length === 1, "Space should have one challenge");
 
-body = await expectStatus(`/challenges/${challengeId}`, { method: "PATCH", token: tokenA, body: { title: "Updated Challenge" } }, 200);
+body = await expectStatus(
+  `/challenges/${challengeId}`,
+  { method: "PATCH", token: tokenA, body: { title: "Updated Challenge" } },
+  200
+);
 assert(body.title === "Updated Challenge", "Challenge update did not change the title");
 await expectStatus(`/challenges/${challengeId}`, { method: "PATCH", token: tokenB, body: { title: "Hijack" } }, 403);
 
 // Participants
-body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 1", age: 30, gender: "male" } }, 201);
+body = await expectStatus(
+  `/spaces/join/${shortId}`,
+  { method: "POST", body: { name: "Participant 1", age: 30, gender: "male" } },
+  201
+);
 const participant1Token: string = body.accessToken;
 const participant1Refresh: string = body.refreshToken;
+const participant1Id: string = body.participant.id;
+assert(body.rejoined === false, "A first join should not be reported as a rejoin");
+
 body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 2" } }, 201);
 const participant2Token: string = body.accessToken;
-await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 2" } }, 400);
+
+// Rejoining: the same name returns the same participant, so their results come back with them.
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 1" } }, 200);
+assert(body.rejoined === true, "Joining with an existing name should be reported as a rejoin");
+assert(body.participant.id === participant1Id, "Rejoining should return the existing participant");
+// The access token is a JWT over the same payload, so within one second it is byte-identical;
+// the refresh token is the random part and must be new.
+assert(body.refreshToken !== participant1Refresh, "Rejoining should issue a fresh refresh token");
+// Details left blank on a rejoin must not wipe what was already there.
+assert(body.participant.age === 30 && body.participant.gender === "male", "Rejoining wiped the participant's details");
+
+// Matching ignores case, so "participant 1" cannot become a second participant.
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "pArTiCiPaNt 1" } }, 200);
+assert(body.participant.id === participant1Id, "Name matching should ignore case");
+
+// A rejoin may fill in details that were skipped the first time.
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 2", age: 41 } }, 200);
+assert(body.participant.age === 41, "Rejoining should apply details that are supplied");
 
 await expectStatus("/users/me", { token: participant1Token }, 403);
 await expectStatus("/spaces", { method: "POST", token: participant1Token, body: { title: "Nope" } }, 403);
@@ -206,13 +282,21 @@ await expectStatus(`/challenges/${challengeId}`, { token: participant1Token }, 2
 await expectStatus(`/challenges/${challengeId}`, { method: "DELETE", token: participant1Token }, 403);
 
 // Challenge results
-await expectStatus(`/challenges/${challengeId}/results`, { method: "POST", token: tokenA, body: { rawMetrics: { repetitions: 1 } } }, 403);
+await expectStatus(
+  `/challenges/${challengeId}/results`,
+  { method: "POST", token: tokenA, body: { rawMetrics: { repetitions: 1 } } },
+  403
+);
 body = await expectStatus(
   `/challenges/${challengeId}/results`,
   { method: "POST", token: participant1Token, body: { rawMetrics: { repetitions: 10 } } },
   201
 );
 const challengeResultId: string = body.id;
+// 10 reps against `zero: 0, full: 20` is half marks, and the scoring snapshot is stored with it.
+assert(body.totalScore === "50.00", `Expected a scored result, got totalScore=${body.totalScore}`);
+assert(body.scores.exercises[0].points === 50, "Result should carry a per-exercise score breakdown");
+assert(body.scores.passed === false, "50 points is below this template's pass mark of 60");
 
 body = await expectStatus(`/challenges/${challengeId}/results`, { token: participant2Token }, 200);
 assert(body.length === 1, "Leaderboard should be visible to other participants");
@@ -234,6 +318,29 @@ body = await expectStatus(
   200
 );
 assert(body.rawMetrics.repetitions === 12, "Result update did not change raw metrics");
+assert(body.totalScore === "60.00", "Editing a result should re-score it");
+assert(body.scores.passed === true, "60 points should meet the pass mark");
+
+// Rejoining after losing the session returns the earlier results.
+body = await expectStatus(`/spaces/join/${shortId}`, { method: "POST", body: { name: "Participant 1" } }, 200);
+const participant1RejoinToken: string = body.accessToken;
+body = await expectStatus("/participants/me/results", { token: participant1RejoinToken }, 200);
+assert(
+  body.length === 1 && body[0].id === challengeResultId,
+  "A rejoined participant should see the results they submitted before"
+);
+
+// Metrics are validated against the challenge's template.
+await expectStatus(
+  `/challenges/${challengeId}/results`,
+  { method: "POST", token: participant2Token, body: { rawMetrics: { bogus: 1 } } },
+  400
+);
+await expectStatus(
+  `/challenges/${challengeId}/results`,
+  { method: "POST", token: participant2Token, body: { rawMetrics: {} } },
+  400
+);
 
 // Admin sees everything
 await expectStatus("/spaces", { token: tokenA }, 403);

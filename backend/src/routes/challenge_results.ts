@@ -15,14 +15,15 @@ import {
   requireSpaceMember,
   type Caller,
 } from "../auth";
+import { scoreSubmission } from "../scoring";
 
 const loadResultForCaller = async (resultId: string, caller: Caller) => {
   const [result] = await db.select().from(challenge_results).where(eq(challenge_results.id, resultId));
   if (!result) {
     throw new HTTPException(404, { message: "Challenge result not found" });
   }
-  await loadChallengeForCaller(result.challengeId, caller);
-  return result;
+  const challenge = await loadChallengeForCaller(result.challengeId, caller);
+  return { result, challenge };
 };
 
 const routes = new Hono()
@@ -75,7 +76,7 @@ const routes = new Hono()
     requireSpaceMember,
     validator("param", idParamSchema),
     async (c) => {
-      const result = await loadResultForCaller(c.req.valid("param").id, c.var.caller);
+      const { result } = await loadResultForCaller(c.req.valid("param").id, c.var.caller);
       return c.json(result, 200);
     }
   )
@@ -95,6 +96,7 @@ const routes = new Hono()
             },
           },
         },
+        400: { description: "Metrics do not match the challenge's template" },
         401: { description: "Not authenticated" },
         403: { description: "You can only update your own results" },
         404: { description: "Challenge result not found" },
@@ -105,19 +107,24 @@ const routes = new Hono()
     validator("json", updateChallengeResultSchema),
     async (c) => {
       const participant = c.var.participant;
-      const result = await loadResultForCaller(c.req.valid("param").id, { kind: "participant", participant });
+      const { result, challenge } = await loadResultForCaller(c.req.valid("param").id, {
+        kind: "participant",
+        participant,
+      });
       if (result.participantId !== participant.id) {
         throw new HTTPException(403, { message: "You can only update your own results" });
       }
 
-      const updatedData = c.req.valid("json");
-      if (Object.keys(updatedData).length === 0) {
+      const { rawMetrics } = c.req.valid("json");
+      if (rawMetrics === undefined) {
         return c.json(result, 200);
       }
 
+      const scored = await scoreSubmission(challenge, participant.id, rawMetrics);
+
       const [updated] = await db
         .update(challenge_results)
-        .set(updatedData)
+        .set(scored)
         .where(eq(challenge_results.id, result.id))
         .returning();
       return c.json(updated, 200);
@@ -141,7 +148,7 @@ const routes = new Hono()
     validator("param", idParamSchema),
     async (c) => {
       const caller = c.var.caller;
-      const result = await loadResultForCaller(c.req.valid("param").id, caller);
+      const { result } = await loadResultForCaller(c.req.valid("param").id, caller);
       if (caller.kind === "participant" && result.participantId !== caller.participant.id) {
         throw new HTTPException(403, { message: "You can only delete your own results" });
       }

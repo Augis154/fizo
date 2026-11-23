@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { validator, resolver, describeRoute } from "hono-openapi";
 
-import db, { challenge_results, challenges } from "../db";
+import db, { challenge_results, challenges, participants, templates } from "../db";
 import { eq } from "drizzle-orm/sql/expressions/conditions";
 import {
   idParamSchema,
@@ -11,6 +11,8 @@ import {
   challengeResponseSchema,
   createChallengeResultSchema,
   challengeResultResponseSchema,
+  leaderboardEntrySchema,
+  templateResponseSchema,
 } from "shared";
 import {
   bearerSecurity,
@@ -21,6 +23,7 @@ import {
   requireParticipant,
   requireSpaceMember,
 } from "../auth";
+import { scoreSubmission } from "../scoring";
 
 const routes = new Hono()
   .get(
@@ -143,19 +146,55 @@ const routes = new Hono()
     }
   )
   .get(
+    "/:id/template",
+    describeRoute({
+      operationId: "Get Challenge Template",
+      tags: ["Challenges"],
+      description:
+        "Get the template a challenge uses, including its exercises and scoring rules. " +
+        "Available to the space organizer and its participants, who need it to fill in a result.",
+      security: bearerSecurity,
+      responses: {
+        200: {
+          description: "Template found",
+          content: {
+            "application/json": {
+              schema: resolver(templateResponseSchema),
+            },
+          },
+        },
+        401: { description: "Not authenticated" },
+        403: { description: "No access to this challenge" },
+        404: { description: "Challenge or template not found" },
+      },
+    }),
+    requireSpaceMember,
+    validator("param", idParamSchema),
+    async (c) => {
+      const challenge = await loadChallengeForCaller(c.req.valid("param").id, c.var.caller);
+
+      const [template] = await db.select().from(templates).where(eq(templates.id, challenge.templateId));
+      if (!template) {
+        return c.body(null, 404);
+      }
+      return c.json(template, 200);
+    }
+  )
+  .get(
     "/:id/results",
     describeRoute({
       operationId: "Get Challenge Results",
       tags: ["Challenges"],
       description:
-        "Get all results of a challenge (leaderboard). Available to the space organizer and its participants.",
+        "Get all results of a challenge (leaderboard), each with the participant who submitted it. " +
+        "Available to the space organizer and its participants.",
       security: bearerSecurity,
       responses: {
         200: {
           description: "A list of challenge results",
           content: {
             "application/json": {
-              schema: resolver(v.array(challengeResultResponseSchema)),
+              schema: resolver(v.array(leaderboardEntrySchema)),
             },
           },
         },
@@ -169,7 +208,23 @@ const routes = new Hono()
     async (c) => {
       const challenge = await loadChallengeForCaller(c.req.valid("param").id, c.var.caller);
 
-      const results = await db.select().from(challenge_results).where(eq(challenge_results.challengeId, challenge.id));
+      const results = await db
+        .select({
+          id: challenge_results.id,
+          challengeId: challenge_results.challengeId,
+          participantId: challenge_results.participantId,
+          rawMetrics: challenge_results.rawMetrics,
+          totalScore: challenge_results.totalScore,
+          scores: challenge_results.scores,
+          createdAt: challenge_results.createdAt,
+          updatedAt: challenge_results.updatedAt,
+          participantName: participants.name,
+          participantAge: participants.age,
+          participantGender: participants.gender,
+        })
+        .from(challenge_results)
+        .innerJoin(participants, eq(participants.id, challenge_results.participantId))
+        .where(eq(challenge_results.challengeId, challenge.id));
       return c.json(results, 200);
     }
   )
@@ -189,6 +244,7 @@ const routes = new Hono()
             },
           },
         },
+        400: { description: "Metrics do not match the challenge's template" },
         401: { description: "Not authenticated" },
         403: { description: "Participant role required, or challenge is not in the participant's space" },
         404: { description: "Challenge not found" },
@@ -201,14 +257,11 @@ const routes = new Hono()
       const participant = c.var.participant;
       const challenge = await loadChallengeForCaller(c.req.valid("param").id, { kind: "participant", participant });
 
+      const scored = await scoreSubmission(challenge, participant.id, c.req.valid("json").rawMetrics);
+
       const [created] = await db
         .insert(challenge_results)
-        .values({
-          challengeId: challenge.id,
-          participantId: participant.id,
-          rawMetrics: c.req.valid("json").rawMetrics,
-          totalScore: "0.00",
-        })
+        .values({ challengeId: challenge.id, participantId: participant.id, ...scored })
         .returning();
 
       return c.json(created, 201);

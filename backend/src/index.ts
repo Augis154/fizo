@@ -15,7 +15,7 @@ import { getPgErrorCode, PG_FOREIGN_KEY_VIOLATION, PG_UNIQUE_VIOLATION } from ".
 
 const app = new Hono();
 
-const originList = process.env.CORS_ORIGIN ?? "http://localhost:5173"
+const originList = process.env.CORS_ORIGIN ?? "http://localhost:5173";
 
 const corsOrigins = originList.split(",").map((origin) => origin.trim());
 app.use(cors({ origin: corsOrigins, allowHeaders: ["Content-Type", "Authorization"] }));

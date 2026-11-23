@@ -6,7 +6,11 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["svelte", "vite/client"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": {
+      "$lib": ["./src/lib"],
+      "$lib/*": ["./src/lib/*"]
+    }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]
 }
